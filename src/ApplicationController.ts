@@ -21,15 +21,11 @@ export class ApplicationController {
   private static readonly DATE_REGEX: RegExp = /^\d{4}-\d{2}-\d{2}$/;
   private static readonly AMOUNT_REGEX: RegExp = /^\d+([.,]\d{1,2})?$/;
 
-  private readonly manager: AccountManager;
+  public readonly accountManager: AccountManager = new AccountManager();
   private notice: string = "";
 
-  constructor(manager: AccountManager) {
-    this.manager = manager;
-  }
-
   // Главный цикл программы.
-  public async run(): Promise<void> {
+  public async start(): Promise<void> {
     let running: boolean = true;
     while (running) {
       running = await this.showMainMenu();
@@ -46,7 +42,7 @@ export class ApplicationController {
     console.log("=== Управление личными финансами ===\n");
     this.printNotice();
 
-    const accounts: Account[] = this.manager.getAccounts();
+    const accounts: Account[] = this.accountManager.getAccounts();
     if (accounts.length === 0) {
       console.log("Счетов пока нет. Создайте первый.\n");
     }
@@ -79,11 +75,11 @@ export class ApplicationController {
       await this.createAccount();
       return true;
     }
-    await this.showAccountMenu(choice);
+    await this.watchAccount(choice);
     return true;
   }
 
-  private async createAccount(): Promise<void> {
+  public async createAccount(): Promise<void> {
     console.clear();
     console.log("=== Новый счёт ===\n");
 
@@ -105,17 +101,17 @@ export class ApplicationController {
       },
     ]);
 
-    const account: Account = this.manager.createAccount(name);
+    const account: Account = this.accountManager.createAccount(name);
     this.notice = `Счёт «${account.name}» создан.`;
   }
 
   // ---------- Меню счёта ----------
 
-  private async showAccountMenu(accountId: AccountId): Promise<void> {
+  public async watchAccount(accountId: AccountId): Promise<void> {
     let inAccount: boolean = true;
 
     while (inAccount) {
-      const account: Account | undefined = this.manager.getAccount(accountId);
+      const account: Account | undefined = this.accountManager.getAccount(accountId);
       if (account === undefined) {
         return;
       }
@@ -146,13 +142,13 @@ export class ApplicationController {
           await this.addTransaction(account);
           break;
         case AccountMenuAction.DeleteTransaction:
-          await this.deleteTransaction(account);
+          await this.removeTransaction(account);
           break;
         case AccountMenuAction.ExportCsv:
-          this.exportAccount(account);
+          await this.exportTransactionsToCSV(account);
           break;
         case AccountMenuAction.DeleteAccount:
-          inAccount = !(await this.deleteAccount(account));
+          inAccount = !(await this.removeAccount(account));
           break;
         case AccountMenuAction.Back:
           inAccount = false;
@@ -180,7 +176,7 @@ export class ApplicationController {
 
   // ---------- Добавление транзакции ----------
 
-  private async addTransaction(account: Account): Promise<void> {
+  public async addTransaction(account: Account): Promise<void> {
     console.clear();
     console.log(`=== Новая транзакция (счёт «${account.name}») ===\n`);
 
@@ -278,7 +274,7 @@ export class ApplicationController {
 
   // ---------- Удаление транзакции ----------
 
-  private async deleteTransaction(account: Account): Promise<void> {
+  public async removeTransaction(account: Account): Promise<void> {
     const transactions: Transaction[] = account.transactions;
     if (transactions.length === 0) {
       this.notice = "На этом счёте нет транзакций для удаления.";
@@ -326,7 +322,7 @@ export class ApplicationController {
   // ---------- Удаление счёта ----------
 
   // Возвращает true, если счёт был удалён.
-  private async deleteAccount(account: Account): Promise<boolean> {
+  public async removeAccount(account: Account): Promise<boolean> {
     const confirmed: boolean = await this.confirm(
       `Удалить счёт «${account.name}» вместе со всеми транзакциями (${account.transactions.length})?`
     );
@@ -336,21 +332,48 @@ export class ApplicationController {
     }
 
     const name: string = account.name;
-    const deleted: boolean = this.manager.deleteAccount(account.id);
+    const deleted: boolean = this.accountManager.deleteAccount(account.id);
     this.notice = deleted ? `Счёт «${name}» удалён.` : "Счёт не найден.";
     return deleted;
   }
 
   // ---------- Экспорт ----------
 
-  private exportAccount(account: Account): void {
+  public async exportTransactionsToCSV(account: Account): Promise<void> {
+    console.clear();
+    console.log(`=== Экспорт в CSV (счёт «${account.name}») ===\n`);
+
+    const { fileName }: { fileName: string } = await inquirer.prompt<{ fileName: string }>([
+      {
+        type: "input",
+        name: "fileName",
+        message: "Имя файла (без расширения):",
+        default: "transactions",
+        validate: (value: string): boolean | string => this.validateFileName(value),
+      },
+    ]);
+
     try {
-      const filePath: string = this.manager.exportToCsv(account.id);
+      const filePath: string = await this.accountManager.exportToCsv(account.id, fileName.trim());
       this.notice = `Данные сохранены в файл: ${filePath}`;
     } catch (error: unknown) {
       const message: string = error instanceof Error ? error.message : String(error);
       this.notice = `Не удалось экспортировать: ${message}`;
     }
+  }
+
+  private validateFileName(value: string): boolean | string {
+    const trimmed: string = value.trim();
+    if (trimmed.length === 0) {
+      return "Имя файла не может быть пустым.";
+    }
+    if (trimmed.length > 50) {
+      return "Имя файла слишком длинное (максимум 50 символов).";
+    }
+    if (/[\\/:*?"<>|]/.test(trimmed) || trimmed.startsWith(".")) {
+      return "Имя не должно начинаться с точки и содержать символы \\ / : * ? \" < > |";
+    }
+    return true;
   }
 
   // ---------- Вспомогательные методы ----------
